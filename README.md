@@ -104,6 +104,6 @@ You can change the bot’s language using the `/lang` command to make it more ac
 
 ## **Credits**
 
-This project was created by [@yehudalev](https://github.com/yehudalev) and [@bisnuray](https://github.com/bisnuray), and developed and mixed or fixed by [@abirxdhackz](https://github.com/abirxdhackz).
+This project was created by [@yehudalev](https://github.com/yehuda-lev) and [@bisnuray](https://github.com/bisnuray), and developed and mixed or fixed by [@abirxdhackz](https://github.com/abirxdhackz).
 
 ---
