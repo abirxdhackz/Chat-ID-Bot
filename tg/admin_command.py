@@ -3,15 +3,13 @@ import logging
 import random
 import string
 import tempfile
-import time
+import asyncio  # Use asyncio for non-blocking sleep
 from pyrogram import Client, types, errors
 
 from db import repository
 from tg import filters
 
-
 _logger = logging.getLogger(__name__)
-
 
 async def stats(_: Client, msg: types.Message):  # command /stats
     """
@@ -25,76 +23,75 @@ async def stats(_: Client, msg: types.Message):  # command /stats
     groups_active = repository.get_groups_count_active()
 
     text = (
-        f"**סטטיסטיקות על הבוט**\n"
-        f"**כמות היוזרים המנויים בבוט הם:** \n"
-        f"הכל: {users}\n"
-        f"פעילים: {users_active}\n"
-        f"לא פעילים: {users - users_active}\n"
-        f"משתמשי ביזנס {business}\n\n"
-        f"**כמות הקבוצות בבוט הם:** \n"
-        f"הכל: {groups}\n"
-        f"פעילות: {groups_active}\n"
-        f"לא פעילות: {groups - groups_active}\n"
+        f"**Bot Statistics**\n"
+        f"**The number of users subscribed to the bot are:** \n"
+        f"Total: {users}\n"
+        f"Active: {users_active}\n"
+        f"Inactive: {users - users_active}\n"
+        f"Business users: {business}\n\n"
+        f"**The number of groups in the bot are:** \n"
+        f"Total: {groups}\n"
+        f"Active: {groups_active}\n"
+        f"Inactive: {groups - groups_active}\n"
     )
 
     await msg.reply(text=text, quote=True)
 
-
 async def ask_for_who_to_send(_: Client, msg: types.Message):
+    """
+    Ask the user to choose who they want to send a message to.
+    """
     await msg.reply(
-        text="למי ברצונך לשלוח הודעה?",
+        text="Who would you like to send a message to?",
         quote=True,
         reply_markup=types.InlineKeyboardMarkup(
             [
                 [
                     types.InlineKeyboardButton(
-                        text="לכל המשתמשים", callback_data="send:users"
+                        text="To all users", callback_data="send:users"
                     )
                 ],
                 [
                     types.InlineKeyboardButton(
-                        text="לכל הקבוצות",
+                        text="To all groups",
                         callback_data="send:groups",
                     )
                 ],
-                [types.InlineKeyboardButton(text="ביטול", callback_data="send:no")],
+                [types.InlineKeyboardButton(text="Cancel", callback_data="send:no")],
             ]
         ),
     )
 
-
 async def asq_message_for_subscribe(_: Client, msg: types.CallbackQuery):
+    """
+    Handle message sending options for users or groups based on the callback data.
+    """
     match send_to := msg.data.split(":")[-1]:
         case "users":
-            send_to = send_to
-            text = "כל המשתמשים"
+            text = "all users"
         case "groups":
-            send_to = send_to
-            text = "כל הקבוצות"
+            text = "all groups"
         case "no":
-            await msg.answer("ההודעה לא תישלח")
-            await msg.message.edit_text("בוטל")
+            await msg.answer("The message will not be sent")
+            await msg.message.edit_text("Canceled")
             return
         case _:
             return
 
     await msg.message.reply(
-        text=f"אנא שלח את ההודעה שתרצה לשלוח ל{text}\n "
-        f"> אם ההודעה תועבר עם קרדיט, הבוט גם יעביר את ההודעה עם קרדיט",
+        text=f"Please send the message you would like to send to {text}\n"
+        f"> If the message is sent with credit, the bot will also forward it with credit",
     )
     filters.add_listener(
         tg_id=msg.from_user.id,
         data={"send_message_to_subscribers": True, "data": send_to},
     )
 
-
 async def send_broadcast(_: Client, msg: types.Message):
     tg_id = msg.from_user.id
     send_to: str = filters.user_id_to_state.get(tg_id).get("data")
-
     filters.user_id_to_state.pop(tg_id)
 
-    # users, chats = None, None
     match send_to:
         case "users":
             users = repository.get_all_users_active()
@@ -106,7 +103,6 @@ async def send_broadcast(_: Client, msg: types.Message):
             return
 
     log_obj = io.StringIO()
-
     sent = 0
     failed = 0
     count = 0
@@ -118,16 +114,17 @@ async def send_broadcast(_: Client, msg: types.Message):
             break
 
     await msg.reply(
-        text=f"**📣 מתחיל שליחה ל:** {len((chats if chats is not None else users))} צ'אטים\nאנא המתן...\n"
-        f"> מזהה השליחה: `{sent_id}` ניתן להשתמש בו בכדי למחוק את ההודעות שנשלחו עם הפקודה `/delete {sent_id}`",
+        text=f"**📣 Starting to send to:** {len((chats if chats is not None else users))} chats\nPlease wait...\n"
+        f"> Sending ID: `{sent_id}` You can use it to delete the sent messages with the command `/delete {sent_id}`",
     )
-    progress = await msg.reply(text=f"**ההודעה נשלחת ל:** {sent} צ'אטים")
+
+    progress = await msg.reply(text=f"**Message sent to:** {sent} chats")
 
     if users is not None:  # send to users
         for user in users:
             if count > 40:
                 count = 0
-                time.sleep(3)
+                await asyncio.sleep(3)  # Non-blocking sleep
             try:
                 if msg.forward_origin:
                     msg_sent = await msg.forward(chat_id=user.tg_id)
@@ -139,26 +136,26 @@ async def send_broadcast(_: Client, msg: types.Message):
                     sent_id=sent_id, chat_id=user.tg_id, message_id=msg_sent.id
                 )
 
-                if count_edit + 10 == sent:
-                    count_edit += 10
-                    await progress.edit_text(
-                        text=f"**ההודעה נשלחה ל:** {sent} צ'אטים",
-                    )
-
+                # Log success
                 text_log = (
                     f"sent to user: {user.tg_id}, name: {user.name}, "
                     f"language_code: {user.language_code}, username: {user.username}\n"
                 )
                 log_obj.write(text_log)
                 _logger.debug(text_log)
+
+                # Update progress every 10 messages sent
+                if sent % 10 == 0:
+                    await progress.edit_text(
+                        text=f"**The message has been sent to:** {sent} chats",
+                    )
+
                 count += 1
-                time.sleep(
-                    0.05
-                )  # 20 messages per second (Limit: 30 messages per second)
+                await asyncio.sleep(0.05)  # Non-blocking sleep
 
             except errors.FloodWait as e:
                 _logger.error(f"FloodWait: {e.value}")
-                time.sleep(e.value)
+                await asyncio.sleep(e.value)
 
             except errors.InputUserDeactivated:
                 repository.update_user(tg_id=user.tg_id, active=False)
@@ -169,37 +166,42 @@ async def send_broadcast(_: Client, msg: types.Message):
                 log_obj.write(text_log)
                 _logger.debug(text_log)
                 failed += 1
-                continue
 
             except errors.UserIsBlocked:
                 repository.update_user(tg_id=user.tg_id, active=False)
-                text_log = f"user {user.tg_id}, name: {user.name} language_code: {user.language_code}, username: {user.username} Blocked your bot\n"
+                text_log = (
+                    f"user {user.tg_id}, name: {user.name} "
+                    f"language_code: {user.language_code}, username: {user.username} Blocked your bot\n"
+                )
                 log_obj.write(text_log)
                 _logger.debug(text_log)
                 failed += 1
-                continue
 
             except errors.PeerIdInvalid:
                 repository.update_user(tg_id=user.tg_id, active=False)
-                text_log = f"user {user.tg_id}, name: {user.name} language_code: {user.language_code}, username: {user.username} IdInvalid\n"
+                text_log = (
+                    f"user {user.tg_id}, name: {user.name} "
+                    f"language_code: {user.language_code}, username: {user.username} IdInvalid\n"
+                )
                 log_obj.write(text_log)
                 _logger.debug(text_log)
                 failed += 1
-                continue
 
             except errors.BadRequest as e:
                 repository.update_user(tg_id=user.tg_id, active=False)
-                text_log = f"BadRequest: {e} : user {user.tg_id}, name: {user.name} language_code: {user.language_code}, username: {user.username}"
+                text_log = (
+                    f"BadRequest: {e} : user {user.tg_id}, name: {user.name} "
+                    f"language_code: {user.language_code}, username: {user.username}"
+                )
                 log_obj.write(text_log)
                 _logger.debug(text_log)
                 failed += 1
-                continue
 
     if chats is not None:  # send to chats
         for chat in chats:
             if count > 40:
                 count = 0
-                time.sleep(3)
+                await asyncio.sleep(3)
             try:
                 if msg.forward_origin:
                     msg_sent = await msg.forward(chat_id=chat.group_id)
@@ -211,23 +213,23 @@ async def send_broadcast(_: Client, msg: types.Message):
                     sent_id=sent_id, chat_id=chat.group_id, message_id=msg_sent.id
                 )
 
-                if count_edit + 10 == sent:
-                    count_edit += 10
+                # Log success
+                text_log = f"sent to chat: {chat.group_id}, name: {chat.name}, username: {chat.username}\n"
+                log_obj.write(text_log)
+                _logger.debug(text_log)
+
+                # Update progress every 10 messages sent
+                if sent % 10 == 0:
                     await progress.edit_text(
                         text=f"**ההודעה נשלחה ל:** {sent} צ'אטים",
                     )
 
-                text_log = f"sent to user: {chat.group_id}, name: {chat.name} username: {chat.username}\n"
-                log_obj.write(text_log)
-                _logger.debug(text_log)
                 count += 1
-                time.sleep(
-                    0.05
-                )  # 20 messages per second (Limit: 30 messages per second)
+                await asyncio.sleep(0.05)
 
             except errors.FloodWait as e:
                 _logger.error(f"FloodWait: {e.value}")
-                time.sleep(e.value)
+                await asyncio.sleep(e.value)
 
             except errors.BadRequest as e:
                 repository.update_group(group_id=chat.group_id, active=False)
@@ -235,23 +237,30 @@ async def send_broadcast(_: Client, msg: types.Message):
                 log_obj.write(text_log)
                 _logger.debug(text_log)
                 failed += 1
-                continue
 
+    # Send report at the end of the broadcast
+    await send_report(_, msg, sent, failed, sent_id, log_obj, repository)
+
+# Function to send a report message
+async def send_report(client: Client, msg: types.Message, sent, failed, sent_id, log_obj, repository):
     text_done = (
-        f"📣 השליחה הושלמה\n\n🔹ההודעה נשלחה ל: {sent} צ'אטים\n"
-        f"🔹 ההודעה נכשלה ב: {failed} צ'אטים"
-        f"\n\n🔹 מזהה השליחה: {sent_id}\n"
-        f"🔹 נשלח בתאריך: {time.strftime('%d/%m/%Y')}\n"
-        f"🔹 נשלח בשעה: {time.strftime('%H:%M:%S')}\n"
-        f"\nניתן למחוק את ההודעות על ידי שליחת הפקודה `/delete {sent_id}`"
+        f"📣 Sending completed\n\n"
+        f"🔹 The message was sent to: {sent} chats\n"
+        f"🔹 The message failed in: {failed} chats"
+        f"\n\n🔹 Sending ID: {sent_id}\n"
+        f"🔹 Sent on: {time.strftime('%d/%m/%Y')}\n"
+        f"🔹 Sent at: {time.strftime('%H:%M:%S')}\n"
+        f"\nYou can delete the messages by sending the command `/delete {sent_id}`"
     )
 
+    # Log the report
     text_log = f"\n\nSent: {sent}, Failed: {failed}\n Sent_id: {sent_id}\n\n"
     log_obj.write(text_log)
     _logger.debug(text_log)
 
+    # Save log to a temporary file
     with tempfile.TemporaryFile(delete=False) as temp_file:
-        # write log to file
+        # Write log to file
         temp_file.write(log_obj.getvalue().encode())
         temp_file.flush()
         temp_file_path = temp_file.name
@@ -262,47 +271,48 @@ async def send_broadcast(_: Client, msg: types.Message):
             _logger.exception(e)
             await msg.reply(f"```py\n{e}```")
 
-
+# Function to delete sent messages
 async def delete_sent_messages(client: Client, msg: types.Message):
     """
     Delete sent messages.
-    when the user sends the command /delete
+    When the user sends the command /delete
     """
     try:
         sent_id = msg.text.split(" ")[1]
     except IndexError:
-        await msg.reply("לא נמצא מזהה של ההודעות שנשלחו")
+        await msg.reply("Message ID not found")
         return
 
+    # Validate the sent ID
     if not repository.is_message_sent_exists(sent_id=sent_id):
-        await msg.reply("המזהה אינו תקין")
+        await msg.reply("The ID is not valid")
         return
 
     sent_messages = repository.get_messages_sent(sent_id=sent_id)
-    await msg.reply(f"מוחק {len(sent_messages)} הודעות שנשלחו")
+    await msg.reply(f"Deleting {len(sent_messages)} sent messages")
 
     count = 0
     delete = 0
     for sent_message in sent_messages:
         if count > 40:
             count = 0
-            time.sleep(3)
+            await asyncio.sleep(3)  # Non-blocking sleep after 40 messages
 
         try:
             await client.delete_messages(
                 chat_id=sent_message.chat_id, message_ids=sent_message.message_id
             )
             count += 1
-            time.sleep(0.05)  # 20 messages per second (Limit: 30 messages per second)
+            await asyncio.sleep(0.05)
             delete += 1
 
         except errors.FloodWait as e:
             _logger.error(f"FloodWait: {e.value}")
-            time.sleep(e.value)
+            await asyncio.sleep(e.value)
 
         except Exception as e:
             _logger.error(
                 f"Error: {e}, chat_id: {sent_message.chat_id}, message_id: {sent_message.message_id}"
             )
 
-    await msg.reply(f"נמחקו {delete} הודעות")
+    await msg.reply(f"Deleted {delete} messages")
